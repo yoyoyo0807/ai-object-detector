@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.env
+backend/*.pt
+
+# Node.js
+node_modules/
+.next/
+out/
+.env.local
+
+# Infrastructure / OS
+.terraform/
+*.tfstate*
+.DS_Store
