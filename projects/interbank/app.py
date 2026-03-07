@@ -2,21 +2,27 @@ import streamlit as st
 import pandas as pd
 import joblib
 import os
+import re
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
 def get_bq_client():
-    """Streamlit Secretsから認証情報を読み込み、改行コードを補正してクライアントを作成"""
+    """Secretsの認証情報から不正な文字を除去してクライアントを作成"""
     if "gcp_service_account" in st.secrets:
-        # Secretsから辞書を取得
         info = dict(st.secrets["gcp_service_account"])
         
-        # 【重要】private_key内の文字列としての \n を実際の改行文字に置換
         if "private_key" in info:
-            info["private_key"] = info["private_key"].replace("\\n", "\n")
+            # 1. 文字列としての \n を実際の改行に置換
+            pk = info["private_key"].replace("\\n", "\n")
+            # 2. 先頭や末尾の空白・BOM・不正な制御文字を徹底除去
+            pk = pk.strip().encode('ascii', 'ignore').decode('ascii')
+            info["private_key"] = pk
             
-        credentials = service_account.Credentials.from_service_account_info(info)
-        return bigquery.Client(credentials=credentials, project=info["project_id"])
+        try:
+            credentials = service_account.Credentials.from_service_account_info(info)
+            return bigquery.Client(credentials=credentials, project=info["project_id"])
+        except Exception as e:
+            st.error(f"認証エラーの詳細: {e}")
     return None
 
 st.set_page_config(page_title="Student Success AI", layout="wide")
@@ -24,6 +30,7 @@ st.title("🎓 大学生の習慣分析・成績向上アドバイザー")
 
 # --- 1. 学習済みモデルの読み込み ---
 try:
+    # GitHub上のモデルをロード
     model = joblib.load('student_model.pkl')
     st.sidebar.success("✅ 学習済みモデルをロードしました")
 except Exception as e:
@@ -42,10 +49,10 @@ with col2:
     attendance_percentage = st.slider("出席率 (%)", 0.0, 100.0, 14.0)
 
 if st.button("AIで試験成績を予測する"):
-    # 成功が確認された順序を維持
+    # 学習時と同じ正確な順序
     columns_order = ['study_hours_per_day', 'sleep_hours', 'social_media_hours', 'attendance_percentage']
-    input_values = [study_hours_per_day, sleep_hours, social_media_hours, attendance_percentage]
-    input_df = pd.DataFrame([input_values], columns=columns_order)
+    input_df = pd.DataFrame([[study_hours_per_day, sleep_hours, social_media_hours, attendance_percentage]], 
+                            columns=columns_order)
     
     try:
         prediction = model.predict(input_df)[0]
@@ -54,11 +61,8 @@ if st.button("AIで試験成績を予測する"):
         if prediction >= 80:
             st.balloons()
             st.success("✨ 素晴らしい習慣です！")
-        elif prediction < 60:
-            st.warning("⚠️ 生活習慣の調整でさらなる向上が期待できます。")
-            
     except Exception as e:
-        st.error(f"予測エラーが発生しました: {e}")
+        st.error(f"予測エラー: {e}")
 
 # --- 3. BigQueryからの実績表示 ---
 st.divider()
@@ -70,6 +74,6 @@ if client:
         df = client.query(query).to_dataframe()
         st.dataframe(df)
     except Exception as e:
-        st.error(f"データ取得エラー: {e}")
+        st.error(f"BigQuery接続エラー: {e}")
 else:
-    st.info("💡 Secretsを設定してください。設定後、BigQueryの実績データが表示されます。")
+    st.info("💡 Secretsの認証キーが正しく読み込めていません。")
