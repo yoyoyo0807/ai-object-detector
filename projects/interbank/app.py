@@ -2,67 +2,66 @@ import streamlit as st
 import pandas as pd
 import joblib
 import os
-import json
-import base64
 from google.cloud import bigquery
 from google.oauth2 import service_account
 
-# ページ設定
-st.set_page_config(page_title="Student Success AI", layout="wide")
-
 def get_bq_client():
+    """Streamlit Secretsから認証情報を読み込みBigQueryクライアントを作成"""
     if "gcp_service_account" in st.secrets:
-        encoded_key = st.secrets["GCP_SERVICE_ACCOUNT_BASE64"]
-        decoded_key = base64.b64decode(encoded_key).decode("utf-8")
-        info = json.loads(decoded_key)
-        info["private_key"] = info["private_key"].replace("\\n", "\n")
+        # Secretsから辞書形式で情報を取得
+        info = dict(st.secrets["gcp_service_account"])
         credentials = service_account.Credentials.from_service_account_info(info)
         return bigquery.Client(credentials=credentials, project=info["project_id"])
     return None
 
+st.set_page_config(page_title="Student Success AI", layout="wide")
 st.title("🎓 大学生の習慣分析・成績向上アドバイザー")
 
 # --- 1. 学習済みモデルの読み込み ---
 try:
-    # 以前作成した学習済みモデルファイルを読み込む
     model = joblib.load('student_model.pkl')
     st.sidebar.success("✅ 学習済みモデルをロードしました")
 except Exception as e:
     st.sidebar.error(f"❌ モデルのロードに失敗: {e}")
     st.stop()
 
-# --- 2. 予測のためのユーザー入力フォーム ---
+# --- 2. 予測シミュレーション ---
 st.header("🔍 成績予測シミュレーション")
+
 col1, col2 = st.columns(2)
-
 with col1:
-    study_hours = st.slider("1日の勉強時間 (時間)", 0.0, 15.0, 5.0)
-    sleep_hours = st.slider("1日の睡眠時間 (時間)", 0.0, 12.0, 7.0)
-
+    study_hours_per_day = st.slider("1日の勉強時間", 0.0, 15.0, 5.0)
+    sleep_hours = st.slider("睡眠時間 (時間)", 0.0, 12.0, 7.0)
 with col2:
-    attendance = st.slider("講義の出席率 (%)", 0, 100, 90)
-    prev_score = st.number_input("前回の試験スコア", 0, 100, 70)
+    social_media_hours = st.slider("SNS利用時間 (時間)", 0.0, 12.0, 2.0)
+    attendance_percentage = st.slider("出席率 (%)", 0.0, 100.0, 90.0)
 
-# 予測実行ボタン
 if st.button("AIで試験成績を予測する"):
-    # モデルに渡す形式に整形
-    input_data = pd.DataFrame([[study_hours, sleep_hours, attendance, prev_score]], 
-                              columns=['study_hours', 'sleep_hours', 'attendance', 'prev_score'])
+    # 成功した時と同じ正確な順序
+    columns_order = ['study_hours_per_day', 'sleep_hours', 'social_media_hours', 'attendance_percentage']
+    input_values = [study_hours_per_day, sleep_hours, social_media_hours, attendance_percentage]
+    input_df = pd.DataFrame([input_values], columns=columns_order)
     
-    prediction = model.predict(input_data)[0]
-    st.metric(label="予測スコア", value=f"{prediction:.1f} 点")
-    
-    # 分析に基づいた一言アドバイス
-    if prediction < 60:
-        st.warning("⚠️ 生活習慣を見直すことで、スコアがさらに伸びる可能性があります！")
-    else:
-        st.info("✨ 素晴らしい習慣です！この調子で継続しましょう。")
+    try:
+        prediction = model.predict(input_df)[0]
+        st.metric(label="AI予測スコア (exam_score)", value=f"{prediction:.1f} 点")
+        
+        if prediction >= 80:
+            st.balloons()
+            st.success("✨ 素晴らしい習慣です！そのまま維持しましょう。")
+        elif prediction < 60:
+            st.warning("⚠️ 生活習慣を改善することで、さらにスコアを伸ばせる可能性があります。")
+            
+    except Exception as e:
+        st.error(f"予測エラーが発生しました: {e}")
 
-# --- 3. BigQueryからのデータ表示（実績確認） ---
+# --- 3. BigQueryからの実績表示 ---
 st.divider()
-st.subheader("📊 実際の学習データ (BigQuery)")
+st.subheader("📊 BigQuery 実績データ確認")
 client = get_bq_client()
 if client:
-    df = client.query(f"SELECT * FROM `{client.project}.student_data.habits_performance` LIMIT 5").to_dataframe()
+    query = f"SELECT student_id, study_hours_per_day, sleep_hours, social_media_hours, attendance_percentage, exam_score FROM `{client.project}.student_data.habits_performance` LIMIT 10"
+    df = client.query(query).to_dataframe()
     st.dataframe(df)
-
+else:
+    st.info("💡 クラウド公開後は、StreamlitのSecrets設定が必要です。")
